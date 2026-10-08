@@ -1,0 +1,24 @@
+{
+  "name": "trafficsim",
+  "version": "0.1.0",
+  "description": "Multimodal traffic simulation of Karlsruhe with signal control strategies and a 3D viewer",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "fetch-osm": "node scripts/fetch-osm.mjs",
+    "build-network": "tsx scripts/build-network.ts",
+    "benchmark": "tsx scripts/benchmark.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/three": "^0.186.0",
+    "three": "^0.186.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}
