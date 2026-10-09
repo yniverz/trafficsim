@@ -10,7 +10,7 @@ A multimodal traffic simulation of Karlsruhe's inner city that runs entirely in 
 
 ```bash
 npm install
-npm run dev          # http://localhost:5173
+npm run dev          # http://localhost:5173  (or open the live demo: https://yniverz.github.io/trafficsim/)
 ```
 
 The network (`public/data/karlsruhe.json`, 5 MB) is committed, so nothing else is needed. A full simulated day (05:00–24:00, ~25 000 people, ~60 000 trips) takes ~30 s to compute headless, so the viewer can run at up to ~200× real time.
