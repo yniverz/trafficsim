@@ -15,6 +15,7 @@ export class PedManager {
   peds: Ped[] = [];
   private crossCache = new Map<number, any[]>();
   private nextId = 1;
+  private now = 0;
   constructor(private net: Network, private eng: TrafficEngine, private sig: SignalSystem, private metrics: Metrics, private hooks: PedHooks) {}
 
   add(p: Ped) {
@@ -40,10 +41,16 @@ export class PedManager {
       p.s = leg.sArc0;
       p.sEnd = leg.sEnd;
       p.state = PS_WALK;
+    } else {
+      p.state = PS_WAITSTOP;
+      p.waitStopId = leg.from;
+      p.boardWaitStart = this.now;
+      this.hooks.onArriveStop(p, leg.from, leg, this.now);
     }
   }
 
   update(dt: number, t: number) {
+    this.now = t;
     const net = this.net;
     this.sig.pedWaiting.fill(0);
     this.sig.pedOldest.fill(0);
@@ -124,14 +131,6 @@ export class PedManager {
     if (!next) {
       this.hooks.onDone(p, t);
       return true;
-    }
-    if (next.kind === 'ride') {
-      p.li++;
-      p.state = PS_WAITSTOP;
-      p.waitStopId = next.from;
-      p.boardWaitStart = t;
-      this.hooks.onArriveStop(p, next.from, next, t);
-      return false;
     }
     this.startLeg(p, p.li + 1);
     return false;

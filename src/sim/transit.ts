@@ -23,14 +23,20 @@ interface Waiting {
   since: number;
 }
 
-export interface PtPlan {
+export interface PtRide {
   from: number;
   to: number;
   lineIds: number[];
-  ride: number;
-  walkIn: number;
+  ride: number; // planned seconds on board
+  wait: number; // expected wait for the vehicle
+}
+
+export interface PtPlan {
+  rides: PtRide[];
+  walkIn: number; // metres
   walkOut: number;
-  wait: number;
+  transferWalk: number[]; // metres between consecutive rides
+  cost: number;
 }
 
 export class Transit {
@@ -118,38 +124,87 @@ export class Transit {
     return res.sort((a, b) => Math.hypot(stops[a].x - x, stops[a].y - y) - Math.hypot(stops[b].x - x, stops[b].y - y));
   }
 
-  /** Best direct (no transfer) connection between two points, or null */
+  private directCache = new Map<number, Map<number, { lines: number[]; ride: number }>>();
+  private nearCache = new Map<number, number[]>();
+
+  /** every stop reachable without transfer from `a`, with serving lines and in-vehicle time */
+  directFrom(a: number): Map<number, { lines: number[]; ride: number }> {
+    let m = this.directCache.get(a);
+    if (m) return m;
+    m = new Map();
+    for (const sv of this.stopsServing.get(a) || []) {
+      const line = this.lines[sv.line];
+      for (let j = sv.idx + 1; j < line.stops.length; j++) {
+        const b = line.stops[j].stop;
+        if (b === a) continue;
+        const ride = line.planned[j] - line.planned[sv.idx];
+        const cur = m.get(b);
+        if (!cur) m.set(b, { lines: [line.id], ride });
+        else {
+          if (!cur.lines.includes(line.id)) cur.lines.push(line.id);
+          if (ride < cur.ride) cur.ride = ride;
+        }
+      }
+    }
+    this.directCache.set(a, m);
+    return m;
+  }
+
+  private nearStop(id: number): number[] {
+    let r = this.nearCache.get(id);
+    if (!r) {
+      const s = this.net.data.stops[id];
+      r = this.nearbyStops(s.x, s.y, 300);
+      this.nearCache.set(id, r);
+    }
+    return r;
+  }
+
+  private hw(lines: number[]): number {
+    return Math.min(...lines.map((id) => this.headway(this.lines[id], 8 * 3600)));
+  }
+
+  /** Best connection (direct or with one transfer) between two points, or null */
   plan(fx: number, fy: number, tx: number, ty: number): PtPlan | null {
     const A = this.nearbyStops(fx, fy, 700).slice(0, 5);
     const B = this.nearbyStops(tx, ty, 700).slice(0, 5);
     if (!A.length || !B.length) return null;
     const stops = this.net.data.stops;
     let best: PtPlan | null = null;
-    let bestCost = Infinity;
     for (const a of A) {
       const sa = stops[a];
       const wa = Math.hypot(sa.x - fx, sa.y - fy) * 1.3;
+      const fromA = this.directFrom(a);
       for (const b of B) {
-        if (a === b) continue;
         const sb = stops[b];
         const wb = Math.hypot(sb.x - tx, sb.y - ty) * 1.3;
-        const lines: number[] = [];
-        let bestRide = Infinity;
-        for (const sv of this.stopsServing.get(a) || []) {
-          const line = this.lines[sv.line];
-          const j = line.stops.findIndex((q, k) => k > sv.idx && q.stop === b);
-          if (j < 0) continue;
-          const ride = line.planned[j] - line.planned[sv.idx];
-          lines.push(line.id);
-          if (ride < bestRide) bestRide = ride;
+        const d = fromA.get(b);
+        if (d && Math.hypot(sa.x - sb.x, sa.y - sb.y) >= 350) {
+          const wait = this.hw(d.lines) * 0.5;
+          const cost = (wa + wb) / 1.3 + d.ride + wait * 1.2;
+          if (!best || cost < best.cost) best = { rides: [{ from: a, to: b, lineIds: d.lines, ride: d.ride, wait }], walkIn: wa, walkOut: wb, transferWalk: [], cost };
         }
-        if (!lines.length) continue;
-        if (Math.hypot(sa.x - sb.x, sa.y - sb.y) < 350) continue;
-        const hw = Math.min(...lines.map((id) => this.headway(this.lines[id], 8 * 3600)));
-        const cost = (wa + wb) / 1.3 + bestRide + hw * 0.6;
-        if (cost < bestCost) {
-          bestCost = cost;
-          best = { from: a, to: b, lineIds: lines, ride: bestRide, walkIn: wa, walkOut: wb, wait: hw * 0.5 };
+      }
+      // one transfer
+      for (const [m, d1] of fromA) {
+        for (const m2 of this.nearStop(m)) {
+          const fromM2 = this.directFrom(m2);
+          for (const b of B) {
+            const d2 = fromM2.get(b);
+            if (!d2) continue;
+            const sm = stops[m], sm2 = stops[m2], sb = stops[b];
+            if (Math.hypot(sa.x - sb.x, sa.y - sb.y) < 600) continue;
+            const wt = m === m2 ? 0 : Math.hypot(sm.x - sm2.x, sm.y - sm2.y) * 1.3;
+            const wb = Math.hypot(sb.x - tx, sb.y - ty) * 1.3;
+            const w1 = this.hw(d1.lines) * 0.5, w2 = this.hw(d2.lines) * 0.5;
+            const cost = (wa + wb + wt) / 1.3 + d1.ride + d2.ride + w1 * 1.2 + w2 * 1.2 + 240;
+            if (!best || cost < best.cost) {
+              best = {
+                rides: [{ from: a, to: m, lineIds: d1.lines, ride: d1.ride, wait: w1 }, { from: m2, to: b, lineIds: d2.lines, ride: d2.ride, wait: w2 }],
+                walkIn: wa, walkOut: wb, transferWalk: [wt], cost,
+              };
+            }
+          }
         }
       }
     }

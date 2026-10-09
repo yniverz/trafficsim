@@ -115,7 +115,7 @@ export class TrafficEngine {
     this.pedBlock = new Int16Array(E * 2);
     this.pedWaitCount = new Int16Array(net.N);
     this.stats = {
-      queue: new Float32Array(E), persons: new Float32Array(E), approach: new Float32Array(E), near: new Float32Array(E), nearPersons: new Float32Array(E),
+      queue: new Float32Array(E), persons: new Float32Array(E), approach: new Float32Array(E), near: new Float32Array(E), nearPersons: new Float32Array(E), headStopped: new Float32Array(E),
       tramDist: new Float32Array(E).fill(Infinity), busDist: new Float32Array(E).fill(Infinity), count: new Float32Array(E),
     };
     this.edgeSpeedEma = new Float32Array(E);
@@ -242,7 +242,7 @@ export class TrafficEngine {
     this.stepNo++;
     const net = this.net;
     const st = this.stats;
-    st.queue.fill(0); st.persons.fill(0); st.approach.fill(0); st.near.fill(0); st.nearPersons.fill(0);
+    st.queue.fill(0); st.persons.fill(0); st.approach.fill(0); st.near.fill(0); st.nearPersons.fill(0); st.headStopped.fill(0);
     st.tramDist.fill(Infinity); st.busDist.fill(Infinity);
     this.frontCache.fill(null);
     this.sumV.fill(0); this.nV.fill(0);
@@ -683,6 +683,7 @@ export class TrafficEngine {
     else if (v.v > 2) v.wait = 0;
     if (this.sigNodeOfEdge[e0] === 1 && toLine > -2) {
       const st = this.stats;
+      if (toLine < 14 && v.stopped > st.headStopped[e0]) st.headStopped[e0] = v.stopped;
       if (v.type === VT_TRAM) {
         if (toLine < st.tramDist[e0]) st.tramDist[e0] = Math.max(0, toLine);
       } else {
@@ -762,7 +763,7 @@ export class TrafficEngine {
       const outE = v.occOut[i];
       const inE = v.occIn[i];
       if (v.edge === outE) {
-        if (v.s - v.len > net.stopOff[inE] + 1) this.dropOcc(v, i);
+        if (v.s - v.len > 2.0) this.dropOcc(v, i);
       } else if (v.edge !== inE) {
         this.dropOcc(v, i);
       }
@@ -782,7 +783,8 @@ export class TrafficEngine {
     if (v.ri >= v.route.length - 1) return;
     const e = v.edge;
     const line = net.edgeLen[e] - net.stopOff[e];
-    if (v.s >= line && (prevS < line || prevS < 0)) {
+    if (v.s >= line + 1.2 || (v.s >= line && v.v > 2.5)) {
+      if (v.occN.length && v.occIn.indexOf(e) >= 0) return;
       const node = net.edgeTo[e];
       const next = v.route[v.ri + 1];
       // avoid duplicates

@@ -696,6 +696,7 @@ for (const rel of orels) {
   const mode = t.route as 'tram' | 'bus';
   const ref = t.ref || '';
   if (/flix|KIT|KSC|Messe|shuttle/i.test((t.name || '') + (t.operator || '') + ref)) continue;
+  if (mode === 'tram' && !/^(\d|S\d|NL\d)/.test(ref)) continue; // event / special services
   if (/^N|^8\d\d$/.test(ref) && mode === 'bus') continue; // night buses
   const stopMembers: { x: number; y: number; name: string }[] = [];
   for (const m of rel.members) {

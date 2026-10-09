@@ -20,7 +20,7 @@ for (const strategy of strategies) {
     const sim = new Simulation(data, {
       demand: { agents, seed: 42, startHour: start, endHour: 24 } as any,
       strategy, startTime: start * 3600, seed,
-      signal: { tramPriority: tp },
+      signal: { tramPriority: tp }, gating: process.env.GATING === '1',
     });
     const t0 = Date.now();
     sim.advance(hours * 3600);
@@ -47,3 +47,9 @@ for (const r of rows) {
 }
 fs.mkdirSync('results', { recursive: true });
 fs.writeFileSync(`results/bench-${agents}-${start}-${hours}-tp${tp ? 1 : 0}.json`, JSON.stringify(rows, null, 1));
+
+if (process.env.PUBLISH === '1') {
+  const meta = `${agents / 1000}k agents · ${String(Math.floor(start)).padStart(2, '0')}:${start % 1 ? '30' : '00'}–${String(Math.floor(start + hours)).padStart(2, '0')}:${(start + hours) % 1 ? '30' : '00'} · mean of ${seeds.length} run${seeds.length > 1 ? 's' : ''}${tp ? ' · tram priority on' : ''}`;
+  fs.writeFileSync('public/data/benchmark.json', JSON.stringify({ meta, rows }, null, 1));
+  console.log('published', meta);
+}

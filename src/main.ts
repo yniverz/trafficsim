@@ -25,6 +25,7 @@ let simBudget = 0;
 let closeTool = false;
 const closed = new Set<number>(); // canonical edge ids
 let selected: { kind: 'veh'; v: Vehicle } | { kind: 'ped'; p: Ped } | null = null;
+let selectedSignal: number | null = null;
 
 async function boot() {
   progress(0.05, 'Downloading the Karlsruhe road network…');
@@ -101,6 +102,7 @@ function setupUI() {
     box.appendChild(b);
   });
   $('waveRow').style.opacity = '0.4';
+  $<HTMLInputElement>('gating').onchange = (e) => sim.setGating((e.target as HTMLInputElement).checked);
   $<HTMLInputElement>('tramPrio').onchange = (e) => sim.setSignalParams({ tramPriority: (e.target as HTMLInputElement).checked });
   const bind = (id: string, valId: string, fmtv: (v: number) => string, apply: (v: number) => void) => {
     const el = $<HTMLInputElement>(id);
@@ -110,6 +112,7 @@ function setupUI() {
   };
   bind('cycle', 'cycleVal', (v) => `${v} s`, (v) => sim.setSignalParams({ cycle: v }));
   bind('pedWait', 'pedWaitVal', (v) => `${v} s`, (v) => sim.setSignalParams({ pedMaxWait: v }));
+  bind('limit', 'limitVal', (v) => `${v}%`, (v) => { sim.eng.speedScale = v / 100; });
   bind('agents', 'agentsVal', (v) => `${v}k`, () => {});
   bind('carShare', 'carShareVal', (v) => `${v}%`, () => {});
   $<HTMLSelectElement>('waveDir').onchange = (e) => sim.setSignalParams({ waveDirection: (e.target as HTMLSelectElement).value as any });
@@ -206,7 +209,7 @@ function updateStats() {
     kpi('Waiting at stops', fmt(s.waitingAtStops), ''),
     kpi('Gridlock teleports', fmt(sim.eng.teleports), trafficLight(sim.eng.teleports, 1, 20)),
     kpi('People-hours lost', fmt(m.personHoursLost), ''),
-    kpi('Cars not yet in', fmt(s.pending), trafficLight(s.pending, 5, 50)),
+    kpi(sim.gating ? 'Held at boundary' : 'Cars not yet in', fmt(sim.gating ? sim.gateHeld : s.pending), trafficLight(s.pending, 5, 50)),
   ];
   $('kpisPt').innerHTML = pt.join('');
   drawChart($('chart') as HTMLCanvasElement, series, sim.config.demand.startHour * 3600);
@@ -254,9 +257,14 @@ function setupInteraction() {
     }
     const pick = nearestAgent(g.x, g.y, world.mode === '2d' ? 9 / world.ortho.zoom * (world.viewSize / 1800) + 4 : 12);
     if (pick) {
+      selectNone();
       selected = pick;
       world.setFollow(pick);
-    } else selectNone();
+    } else {
+      const sg = nearestSignal(g.x, g.y, 30);
+      selectNone();
+      if (sg) selectedSignal = sg.node;
+    }
   });
   canvas.addEventListener('pointermove', (e) => {
     const g = ground(e);
@@ -351,6 +359,7 @@ function describe(sel: NonNullable<typeof selected>, short = false): string {
 
 function updateSelectionCard() {
   const card = $('info');
+  if (selectedSignal !== null) { signalCard(card); return; }
   if (!selected) { card.hidden = true; return; }
   if (selected.kind === 'veh' && !selected.v.alive) { selectNone(); return; }
   if (selected.kind === 'ped' && !sim.peds.peds.includes(selected.p)) { selectNone(); return; }
@@ -358,8 +367,25 @@ function updateSelectionCard() {
   card.innerHTML = `<h4>${describe(selected)}</h4><div class="hint">Following · press Esc to release</div>`;
 }
 
+function signalCard(card: HTMLElement) {
+  const c = sim.sig.byNode.get(selectedSignal!);
+  if (!c) { card.hidden = true; return; }
+  const net = sim.net, st = sim.eng.stats;
+  const rows = c.phases.map((ph, i) => {
+    const names = [...new Set(ph.edges.map((e) => net.edgeName(e)).filter(Boolean))].slice(0, 2).join(' / ') || (ph.pedOnly ? 'pedestrians' : ph.tramOnly ? 'tram' : 'approach');
+    const on = c.disp === i;
+    const state = on ? (c.sub === 0 ? '🟢' : c.sub === 1 ? '🟡' : '🔴') : '🔴';
+    let q = 0, tram = false;
+    for (const e of ph.edges) { q += st.persons[e]; if (st.tramDist[e] < 110) tram = true; }
+    return `<tr><td>${state}</td><td>${names}${ph.tramOnly ? ' 🚊' : ''}</td><td>${Math.round(q)} waiting${tram ? ' · tram near' : ''}</td></tr>`;
+  }).join('');
+  card.hidden = false;
+  card.innerHTML = `<h4>🚦 Signal · ${STRATEGY_INFO[sim.config.strategy].label}</h4><table class="tbl" style="min-width:300px">${rows}</table><div class="hint">${Math.round(sim.sig.pedWaiting[c.node])} pedestrians waiting · phase time ${c.t.toFixed(0)} s · click elsewhere to close</div>`;
+}
+
 function selectNone() {
   selected = null;
+  selectedSignal = null;
   world.setFollow(null);
   $('info').hidden = true;
 }

@@ -188,11 +188,12 @@ export class DemandGenerator {
   private chooseMode(rng: Rng, dist: number, hasCar: boolean, ptOk: boolean, cfg: DemandConfig): number {
     const w = [0, 0, 0, 0];
     const km = dist / 1000;
-    if (km < 0.25) w[MODE_WALK] = 1;
-    else if (km < 1.0) { w[MODE_WALK] = 0.55; w[MODE_BIKE] = 0.2; w[MODE_CAR] = 0.2; w[MODE_PT] = 0.05; }
-    else if (km < 2.5) { w[MODE_WALK] = 0.1; w[MODE_BIKE] = 0.36; w[MODE_CAR] = 0.34; w[MODE_PT] = 0.2; }
-    else if (km < 6) { w[MODE_WALK] = 0.0; w[MODE_BIKE] = 0.27; w[MODE_CAR] = 0.45; w[MODE_PT] = 0.28; }
-    else { w[MODE_BIKE] = 0.08; w[MODE_CAR] = 0.62; w[MODE_PT] = 0.3; }
+    if (km < 0.3) w[MODE_WALK] = 1;
+    else if (km < 0.8) { w[MODE_WALK] = 0.72; w[MODE_BIKE] = 0.14; w[MODE_CAR] = 0.09; w[MODE_PT] = 0.05; }
+    else if (km < 1.8) { w[MODE_WALK] = 0.28; w[MODE_BIKE] = 0.3; w[MODE_CAR] = 0.26; w[MODE_PT] = 0.16; }
+    else if (km < 4) { w[MODE_WALK] = 0.03; w[MODE_BIKE] = 0.28; w[MODE_CAR] = 0.37; w[MODE_PT] = 0.32; }
+    else if (km < 8) { w[MODE_BIKE] = 0.17; w[MODE_CAR] = 0.45; w[MODE_PT] = 0.38; }
+    else { w[MODE_BIKE] = 0.04; w[MODE_CAR] = 0.56; w[MODE_PT] = 0.4; }
     if (!hasCar) w[MODE_CAR] = 0;
     else w[MODE_CAR] *= cfg.carShare;
     if (!ptOk) w[MODE_PT] = 0;
@@ -208,7 +209,7 @@ export class DemandGenerator {
 
   private pickNear(rng: Rng, set: Weighted, x: number, y: number, scale: number): number {
     let best = -1, bw = -1;
-    for (let k = 0; k < 10; k++) {
+    for (let k = 0; k < 14; k++) {
       const i = set.pick(rng);
       const s = this.spots[i];
       const d = Math.hypot(s.x - x, s.y - y);
@@ -247,21 +248,25 @@ export class DemandGenerator {
       const role = isExternal ? 3 : (() => { const q = rng.next(); return q < 0.55 ? 0 : q < 0.7 ? 1 : 2; })();
       const a = make(role);
       if (role === 0 || role === 3) {
-        const wSpot = isExternal ? this.works.pick(rng) : this.pickNear(rng, this.works, hs.x, hs.y, 3500);
-        const workP = this.place(wSpot);
-        const ws = this.spots[wSpot];
+        const outbound = !isExternal && this.gates.length > 0 && rng.chance(0.16);
+        const wSpot = isExternal ? this.works.pick(rng) : this.pickNear(rng, this.works, hs.x, hs.y, 5500);
+        const workP = outbound ? this.gates[this.gateW.pick(rng)] : this.place(wSpot);
+        const ws = outbound ? { x: workP.x, y: workP.y, w: 1, kind: 2 } : this.spots[wSpot];
         const dist = Math.hypot(ws.x - (isExternal ? homeP.x : hs.x), ws.y - (isExternal ? homeP.y : hs.y));
         let mode = isExternal ? (rng.chance(0.93) ? MODE_CAR : MODE_BIKE) : this.chooseMode(rng, dist, hasCar, ptOk(homeP, workP), cfg);
         if (isExternal && mode === MODE_BIKE) mode = MODE_CAR;
+        if (outbound) mode = rng.chance(0.9) ? MODE_CAR : MODE_BIKE;
+        if (outbound && mode === MODE_BIKE) mode = MODE_CAR;
         if (mode === MODE_CAR && (workP.carE < 0 || homeP.carE < 0)) mode = MODE_BIKE;
         if (mode === MODE_BIKE && (workP.bikeE < 0 || (!isExternal && homeP.bikeE < 0))) mode = MODE_WALK;
+        if (outbound && mode === MODE_WALK) mode = MODE_CAR;
         const shiftR = rng.next();
         let start = shiftR < 0.12 ? rng.normal(6.0 * H, 0.5 * H) : shiftR < 0.35 ? rng.normal(9.2 * H, 0.7 * H) : rng.normal(7.9 * H, 0.65 * H);
         start = Math.max(5 * H, start);
-        const ct = this.commuteTime(isExternal ? dist + 6000 : dist, mode);
+        const ct = this.commuteTime(isExternal ? dist + 6000 : outbound ? dist + 4000 : dist, mode);
         addTrip(a, start - ct, homeP, workP, mode, PURPOSE_WORK);
         // lunch
-        if (rng.chance(0.3)) {
+        if (!outbound && rng.chance(0.22)) {
           const fSpot = this.pickNear(rng, this.food, ws.x, ws.y, 500);
           const fp = this.place(fSpot);
           const fs = this.spots[fSpot];
@@ -272,7 +277,7 @@ export class DemandGenerator {
           }
         }
         const end = start + rng.normal(8.3 * H, 0.7 * H);
-        if (rng.chance(0.35) && !isExternal) {
+        if (rng.chance(0.35) && !isExternal && !outbound) {
           const sSpot = this.pickNear(rng, rng.chance(0.65) ? this.shops : this.leisure, ws.x, ws.y, 2000);
           const sp = this.place(sSpot);
           const s2 = this.spots[sSpot];
@@ -286,7 +291,7 @@ export class DemandGenerator {
           addTrip(a, end, workP, homeP, mode, PURPOSE_HOME);
         }
       } else if (role === 1) {
-        const eSpot = this.pickNear(rng, this.edus, hs.x, hs.y, 2500);
+        const eSpot = this.pickNear(rng, this.edus, hs.x, hs.y, 3500);
         const eduP = this.place(eSpot);
         const es = this.spots[eSpot];
         const dist = Math.hypot(es.x - hs.x, es.y - hs.y);
@@ -311,8 +316,8 @@ export class DemandGenerator {
           addTrip(a, t0, homeP, sp, mode, purpose);
           addTrip(a, t0 + rng.range(2400, 7200) + this.commuteTime(dist, mode), sp, homeP, mode, PURPOSE_HOME);
         };
-        if (rng.chance(0.8)) tour(rng.normal(10 * H, 1.2 * H), this.shops, PURPOSE_SHOP, 1800);
-        if (rng.chance(0.45)) tour(rng.normal(15.5 * H, 1.8 * H), this.leisure, PURPOSE_LEISURE, 2500);
+        if (rng.chance(0.8)) tour(rng.normal(10 * H, 1.2 * H), this.shops, PURPOSE_SHOP, 3000);
+        if (rng.chance(0.45)) tour(rng.normal(15.5 * H, 1.8 * H), this.leisure, PURPOSE_LEISURE, 4000);
       }
     }
     // through traffic

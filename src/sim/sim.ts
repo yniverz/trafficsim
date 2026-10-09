@@ -12,6 +12,7 @@ import {
 import { Rng } from './rng';
 
 export interface SimConfig {
+  gating?: boolean;
   demand: DemandConfig;
   strategy: Strategy;
   signal: Partial<SignalParams>;
@@ -28,6 +29,7 @@ export const DEFAULT_CONFIG: SimConfig = {
 };
 
 interface PendingSpawn {
+  gate: boolean;
   v: Vehicle;
   agent: Agent;
   trip: Trip;
@@ -56,6 +58,12 @@ export class Simulation {
   private lastCongestion = 0;
   private carCostCache: Float32Array;
   private tripSeq = 0;
+  /** perimeter control: meter vehicles entering at the map boundary when the city is congested */
+  gating = false;
+  gateRate = 1;
+  private gateTokens = 0;
+  private lastGate = 0;
+  gateHeld = 0;
   private walkCostCache: Float32Array;
 
   constructor(public data: NetworkData, config: Partial<SimConfig> = {}) {
@@ -91,6 +99,9 @@ export class Simulation {
     this.demand = new DemandGenerator(this.net, this.transit);
     if (!keepAgents || !this.agents.length) this.agents = this.demand.generate(cfg.demand);
     this.t = cfg.startTime;
+    this.gating = !!cfg.gating;
+    this.gateRate = 1;
+    this.gateTokens = 0;
     this.dp = 0;
     this.pendingSpawns = [];
     this.departures = [];
@@ -103,6 +114,12 @@ export class Simulation {
     this.lastSeries = this.t;
     this.lastEma = this.t;
     this.refreshCosts();
+  }
+
+  setGating(on: boolean) {
+    this.gating = on;
+    this.config.gating = on;
+    if (!on) { this.gateRate = 1; this.gateTokens = 0; }
   }
 
   setStrategy(s: Strategy) {
@@ -269,24 +286,43 @@ export class Simulation {
         const v = this.eng.makeVehicle(mode === MODE_CAR ? VT_CAR : VT_BIKE, r.route, r.sStart, r.sEnd, () => this.rng.next());
         v.owner = { agent, trip };
         v.tDepart = t;
-        this.pendingSpawns.push({ v, agent, trip, since: t, sEndIdx: 0 });
+        this.pendingSpawns.push({ v, agent, trip, since: t, sEndIdx: 0, gate: !!trip.from.gate && mode === MODE_CAR });
         return;
       }
     }
     if (mode === MODE_PT) {
       const plan = this.transit.plan(trip.from.x, trip.from.y, trip.to.x, trip.to.y);
-      const st = plan ? net.data.stops : null;
       let ok = false;
-      if (plan && st && trip.from.walkC >= 0 && trip.to.walkC >= 0) {
-        const sa = st[plan.from], sb = st[plan.to];
-        const w1 = this.walkLeg(trip.from.walkC, trip.from.walkS, ...this.stopWalkPos(sa.walkEdge, sa.walkS));
-        const w2 = this.walkLeg(...this.stopWalkPos(sb.walkEdge, sb.walkS), trip.to.walkC, trip.to.walkS);
-        if (w1 && w2) {
+      if (plan && trip.from.walkC >= 0 && trip.to.walkC >= 0) {
+        const st = net.data.stops;
+        const legs: Leg[] = [];
+        let good = true;
+        let prev: [number, number] = [trip.from.walkC, trip.from.walkS];
+        let ideal = 0;
+        plan.rides.forEach((r, i) => {
+          const sa = st[r.from];
+          const here = this.stopWalkPos(sa.walkEdge, sa.walkS);
+          if (!(i > 0 && r.from === plan.rides[i - 1].to)) {
+            const w = this.walkLeg(prev[0], prev[1], here[0], here[1]);
+            if (!w) good = false; else legs.push(w);
+          }
+          legs.push({ kind: 'ride', from: r.from, to: r.to, lineIds: r.lineIds });
+          ideal += r.ride + r.wait + 30;
+          const sb = st[r.to];
+          prev = this.stopWalkPos(sb.walkEdge, sb.walkS);
+          // transfer walk is created when the next ride begins at a different stop
+        });
+        const last = st[plan.rides[plan.rides.length - 1].to];
+        const lastPos = this.stopWalkPos(last.walkEdge, last.walkS);
+        const wEnd = this.walkLeg(lastPos[0], lastPos[1], trip.to.walkC, trip.to.walkS);
+        if (!wEnd) good = false; else legs.push(wEnd);
+        if (good) {
           const p = new Ped();
           p.agent = agent; p.trip = trip; p.tDepart = t;
-          p.legs = [w1, { kind: 'ride', from: plan.from, to: plan.to, lineIds: plan.lineIds }, w2];
+          p.legs = legs;
           p.speed = this.walkSpeed();
-          p.idealTime = plan.walkIn / p.speed + plan.walkOut / p.speed + plan.ride + plan.wait + 40;
+          const walk = plan.walkIn + plan.walkOut + plan.transferWalk.reduce((a, b) => a + b, 0);
+          p.idealTime = walk / p.speed + ideal;
           this.peds.add(p);
           ok = true;
         }
@@ -316,16 +352,31 @@ export class Simulation {
   }
 
   private retrySpawns(t: number) {
-    if (!this.pendingSpawns.length) return;
+    // perimeter metering: adapt the admission rate to the share of standing cars
+    if (this.gating && t - this.lastGate >= 15) {
+      this.lastGate = t;
+      let n = 0, stopped = 0;
+      for (const v of this.eng.vehicles) if (v.type === VT_CAR) { n++; if (v.v < 0.5) stopped++; }
+      const share = n > 40 ? stopped / n : 0;
+      this.gateRate = Math.max(0.04, Math.min(1, this.gateRate + 1.2 * (0.2 - share) * (share > 0.2 ? 1.5 : 0.6)));
+    }
+    if (this.gating) this.gateTokens = Math.min(6, this.gateTokens + this.gateRate * 2.5 * this.dt);
+    if (!this.pendingSpawns.length) { this.gateHeld = 0; return; }
     const keep: PendingSpawn[] = [];
+    let held = 0;
     for (const ps of this.pendingSpawns) {
+      if (ps.gate && this.gating) {
+        if (this.gateTokens < 1) { held++; keep.push(ps); continue; }
+      }
       if (this.eng.trySpawn(ps.v, t)) {
+        if (ps.gate && this.gating) this.gateTokens -= 1;
         this.metrics.spawnWait += t - ps.since;
         this.metrics.spawnWaitN++;
-      } else if (t - ps.since > 1200) {
+      } else if (t - ps.since > 3600) {
         this.metrics.stranded++;
       } else keep.push(ps);
     }
+    this.gateHeld = held;
     this.pendingSpawns = keep;
   }
 

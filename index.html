@@ -34,6 +34,7 @@
       <h3>Signal control</h3>
       <div id="strategies"></div>
       <label class="row"><input type="checkbox" id="tramPrio" /> <span>Tram &amp; bus priority <small>(early / extended green for approaching PT)</small></span></label>
+      <label class="row"><input type="checkbox" id="gating" /> <span>Perimeter metering <small>(hold cars entering from outside at the boundary while the streets are full)</small></span></label>
       <label class="slider"><span>Cycle length <b id="cycleVal">90 s</b></span><input type="range" id="cycle" min="50" max="140" step="5" value="90" /></label>
       <label class="slider"><span>Max pedestrian wait <b id="pedWaitVal">45 s</b></span><input type="range" id="pedWait" min="15" max="90" step="5" value="45" /></label>
       <label class="row" id="waveRow"><span>Green-wave favours</span>
@@ -63,6 +64,7 @@
     </section>
     <section>
       <h3>Interventions</h3>
+      <label class="slider"><span>Speed limits (all roads) <b id="limitVal">100%</b></span><input type="range" id="limit" min="50" max="120" step="10" value="100" /></label>
       <div class="btns"><button id="btnClose">Close a road to cars…</button></div>
       <div id="closedList" class="chips"></div>
       <p class="hint" id="toolHint">Click a street on the map while the tool is active. Vehicles re-route around it.</p>

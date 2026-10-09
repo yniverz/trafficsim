@@ -37,6 +37,7 @@ export interface TrafficStats {
   queue: Float32Array; // queued vehicle equivalents per edge near the stop line
   persons: Float32Array; // queued people per edge
   approach: Float32Array; // moving vehicles close to the stop line
+  headStopped: Float32Array; // seconds the vehicle at the stop line has been standing still
   near: Float32Array; // all vehicles (queued or moving) within 110 m of the stop line, weighted
   nearPersons: Float32Array; // people in those vehicles
   tramDist: Float32Array; // distance of nearest tram to stop line (Infinity if none)
@@ -372,13 +373,26 @@ export class SignalSystem {
     return q;
   }
 
+  /** green is on but nobody at the stop line can move (blocked exit, conflicting vehicle ...) */
+  private stalled(c: Controller, st: TrafficStats): boolean {
+    if (c.sub !== 0 || c.t < 12) return false;
+    const ph = c.phases[c.disp];
+    let any = false;
+    for (const e of ph.edges) {
+      if (st.count[e] === 0) continue;
+      any = true;
+      if (st.headStopped[e] < 9) return false;
+    }
+    return any;
+  }
+
   private actuated(c: Controller, st: TrafficStats): number {
     const k = c.phases.length;
     const cur = c.disp;
     if (c.sub !== 0) return c.target;
     const ph = c.phases[cur];
     const greenT = c.t;
-    const hasDemandHere = this.demandOf(c, cur, st) > 0.01;
+    const hasDemandHere = this.demandOf(c, cur, st) > 0.01 && !this.stalled(c, st);
     // extend while vehicles are arriving, up to max green
     const minGreen = ph.tramOnly ? 5 : 7;
     const maxGreen = ph.tramOnly ? 20 : 45;
@@ -448,7 +462,7 @@ export class SignalSystem {
     }
     let best = cur, bs = -1;
     for (let p = 0; p < k; p++) if (p !== cur && aged[p] > bs) { bs = aged[p]; best = p; }
-    const here = dem[cur];
+    const here = this.stalled(c, st) ? 0 : dem[cur];
     if (here > 0.3 && g < 50) return cur; // gap-out: keep serving while people keep arriving
     if (best !== cur && bs > 0.3) return best;
     if (!off('pedcyc') && pedFlag && g > 10 && k > 1) return (cur + 1) % k;
