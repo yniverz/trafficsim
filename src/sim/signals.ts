@@ -21,7 +21,7 @@ export const STRATEGY_INFO: Record<Strategy, { label: string; blurb: string }> =
   },
   smart: {
     label: 'Smart: person-weighted + PT priority',
-    blurb: 'Max-pressure counting people instead of vehicles (a full tram outranks a car), guaranteed pedestrian and tram service, bounded waiting for every approach.',
+    blurb: 'Gap-out control that counts people instead of vehicles (a full tram outranks a car), pre-empts for trams and buses, never serves exits that are already full, and bounds the wait of every approach and of pedestrians.',
   },
 };
 

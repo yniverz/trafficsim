@@ -14,7 +14,7 @@ export type VehicleColorMode = 'speed' | 'mode';
 
 const MAX_CARS = 12000, MAX_BIKES = 6000, MAX_BUSES = 400, MAX_TRAMS = 300, MAX_PEDS = 14000;
 
-const CLASS_COLORS = [0x4c5467, 0x555e72, 0x5f6980, 0x707b96, 0x8490ae, 0x9aa6c6, 0xaab6d4, 0xbac4de];
+const CLASS_COLORS = [0x586179, 0x626c85, 0x6d7893, 0x7f8aa8, 0x95a1c0, 0xaab6d6, 0xbac6e3, 0xc9d3ec];
 
 export class World {
   renderer: THREE.WebGLRenderer;
@@ -85,7 +85,7 @@ export class World {
     this.sun.position.set(-600, 900, 400);
     this.scene.add(this.sun);
 
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), new THREE.MeshBasicMaterial({ color: 0x141821 }));
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), new THREE.MeshBasicMaterial({ color: 0x161b25 }));
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.3;
     this.scene.add(ground);
@@ -209,7 +209,7 @@ export class World {
       this.scene.add(m);
       return m;
     };
-    mk(side, 0x2a2f3b);
+    mk(side, 0x363c4b);
     mk(foot, 0x6c7a8f, 0.9);
     mk(bike, 0x2f6f66, 0.9);
     mk(rail, 0xc0553d, 1);
@@ -217,7 +217,6 @@ export class World {
 
   private buildBuildings() {
     const d = this.sim.data;
-    const geos: THREE.BufferGeometry[] = [];
     const palette: Record<number, number[]> = {
       0: [0x7d8190, 0x8a8e9d, 0x757a8a],
       1: [0x8f8478, 0x9b8f80, 0x84796d],
@@ -226,43 +225,64 @@ export class World {
       4: [0x7aa08a, 0x86ad96, 0x6f9580],
       5: [0xb06b6b, 0xbf7a7a, 0xa06060],
     };
-    const col = new THREE.Color();
-    for (let i = 0; i < d.buildings.length; i++) {
-      const b = d.buildings[i];
+    // count
+    let nv = 0, ni = 0;
+    for (const b of d.buildings) {
       const n = b.pts.length / 2;
-      const shape = new THREE.Shape();
-      let last = -1;
-      for (let k = 0; k < n; k++) {
-        const x = b.pts[2 * k], y = b.pts[2 * k + 1];
-        if (k === 0) shape.moveTo(x, y); else shape.lineTo(x, y);
-        last = k;
-      }
-      void last;
-      let g: THREE.BufferGeometry;
-      try {
-        g = new THREE.ExtrudeGeometry(shape, { depth: b.h, bevelEnabled: false });
-      } catch {
-        continue;
-      }
-      g.rotateX(-Math.PI / 2);
-      const pal = palette[b.kind] || palette[0];
-      col.setHex(pal[i % pal.length]);
-      const v = 0.9 + ((i * 2654435761) % 100) / 500;
-      const nverts = g.attributes.position.count;
-      const colors = new Float32Array(nverts * 3);
-      for (let k = 0; k < nverts; k++) { colors[3 * k] = col.r * v; colors[3 * k + 1] = col.g * v; colors[3 * k + 2] = col.b * v; }
-      g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-      g.deleteAttribute('uv');
-      g.deleteAttribute('normal');
-      geos.push(g);
+      nv += n + 4 * n;
+      ni += (b.tri?.length ?? 0) + 6 * n;
     }
-    const merged = mergeGeometries(geos, false)!;
-    merged.computeVertexNormals();
+    const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), col = new Float32Array(nv * 3);
+    const idx = new Uint32Array(ni);
+    let vi = 0, ii = 0;
+    const c = new THREE.Color();
+    for (let bi = 0; bi < d.buildings.length; bi++) {
+      const b = d.buildings[bi];
+      const p = b.pts, n = p.length / 2, h = b.h;
+      const pal = palette[b.kind] || palette[0];
+      c.setHex(pal[bi % pal.length]);
+      const shade = 0.9 + ((bi * 2654435761) % 100) / 500;
+      const r = c.r * shade, g = c.g * shade, bl = c.b * shade;
+      let area = 0;
+      for (let k = 0; k < n; k++) { const k2 = (k + 1) % n; area += p[2 * k] * p[2 * k2 + 1] - p[2 * k2] * p[2 * k + 1]; }
+      const ccw = area > 0;
+      // roof
+      const roof0 = vi;
+      for (let k = 0; k < n; k++) {
+        pos[3 * vi] = p[2 * k]; pos[3 * vi + 1] = h; pos[3 * vi + 2] = -p[2 * k + 1];
+        nor[3 * vi + 1] = 1;
+        col[3 * vi] = Math.min(1, r * 1.18); col[3 * vi + 1] = Math.min(1, g * 1.18); col[3 * vi + 2] = Math.min(1, bl * 1.18);
+        vi++;
+      }
+      for (const t of b.tri!) idx[ii++] = roof0 + t;
+      // walls
+      for (let k = 0; k < n; k++) {
+        const k2 = (k + 1) % n;
+        const x0 = p[2 * k], y0 = p[2 * k + 1], x1 = p[2 * k2], y1 = p[2 * k2 + 1];
+        let nx = y1 - y0, ny = -(x1 - x0);
+        const l = Math.hypot(nx, ny) || 1;
+        nx /= l; ny /= l;
+        if (!ccw) { nx = -nx; ny = -ny; }
+        const w0 = vi;
+        const put = (x: number, y: number, z: number) => {
+          pos[3 * vi] = x; pos[3 * vi + 1] = y; pos[3 * vi + 2] = z;
+          nor[3 * vi] = nx; nor[3 * vi + 2] = -ny;
+          col[3 * vi] = r; col[3 * vi + 1] = g; col[3 * vi + 2] = bl;
+          vi++;
+        };
+        put(x0, 0, -y0); put(x1, 0, -y1); put(x1, h, -y1); put(x0, h, -y0);
+        idx[ii++] = w0; idx[ii++] = w0 + 1; idx[ii++] = w0 + 2;
+        idx[ii++] = w0; idx[ii++] = w0 + 2; idx[ii++] = w0 + 3;
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geo.setIndex(new THREE.BufferAttribute(idx, 1));
     this.buildingsMesh = new THREE.Group();
-    const mesh = new THREE.Mesh(merged, new THREE.MeshLambertMaterial({ vertexColors: true }));
-    this.buildingsMesh.add(mesh);
+    this.buildingsMesh.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })));
     this.scene.add(this.buildingsMesh);
-    for (const g of geos) g.dispose();
   }
 
   private buildSignals() {

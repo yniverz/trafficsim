@@ -38,6 +38,7 @@ export interface BuildingData {
   pts: number[];
   h: number; // metres
   kind: number; // 0 mixed/unknown, 1 residential, 2 work, 3 retail, 4 education, 5 health/other public
+  tri?: number[]; // roof triangulation, indices into the footprint ring (without the closing duplicate)
 }
 
 export interface PoiData {

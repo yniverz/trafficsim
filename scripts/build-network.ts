@@ -6,6 +6,7 @@ import {
   type BuildingData, type EdgeMode, type LineData, type NetEdgeData, type NetNodeData, type NetworkData, type PoiData, type StopData,
 } from '../src/sim/types.ts';
 import { Router } from '../src/sim/routing.ts';
+import { ShapeUtils, Vector2 } from 'three';
 
 const BBOX = { s: 48.993, w: 8.367, n: 49.018, e: 8.43 };
 const ORIGIN = { lat: 49.0094, lon: 8.4037 }; // Marktplatz
@@ -598,7 +599,16 @@ for (const w of owayList) {
   else if (RETAIL.has(b)) kind = 3;
   else if (EDU.has(b)) kind = 4;
   else if (HEALTH.has(b)) kind = 5;
-  buildings.push({ pts, h: Math.round(h * 10) / 10, kind });
+  // drop the closing duplicate vertex and triangulate the roof once, here, so the viewer starts fast
+  if (pts[0] === pts[pts.length - 2] && pts[1] === pts[pts.length - 1]) { pts.pop(); pts.pop(); }
+  const ring: Vector2[] = [];
+  for (let i = 0; i < pts.length; i += 2) ring.push(new Vector2(pts[i], pts[i + 1]));
+  let tri: number[] = [];
+  try {
+    for (const f of ShapeUtils.triangulateShape(ring, [])) tri.push(f[0], f[1], f[2]);
+  } catch { tri = []; }
+  if (!tri.length) continue;
+  buildings.push({ pts, h: Math.round(h * 10) / 10, kind, tri });
 }
 function hash(n: number) {
   n = ((n >>> 16) ^ n) * 0x45d9f3b;

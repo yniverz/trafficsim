@@ -11,7 +11,7 @@ import { drawChart } from './ui/chart';
 import type { NetworkData } from './sim/types';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+const nextFrame = () => new Promise<void>((r) => { let done = false; const go = () => { if (!done) { done = true; r(); } }; requestAnimationFrame(go); setTimeout(go, 30); });
 
 function progress(p: number, text: string) {
   $('loadBar').style.width = `${Math.round(p * 100)}%`;
@@ -28,9 +28,12 @@ let selected: { kind: 'veh'; v: Vehicle } | { kind: 'ped'; p: Ped } | null = nul
 let selectedSignal: number | null = null;
 
 async function boot() {
+  const T0 = performance.now();
+  const lap = (n: string) => console.info(`[boot] ${n} ${Math.round(performance.now() - T0)} ms`);
   progress(0.05, 'Downloading the Karlsruhe road network…');
-  const res = await fetch(import.meta.env.BASE_URL + 'data/karlsruhe.json');
+  const res = await fetch(import.meta.env.BASE_URL + 'data/karlsruhe.json', { cache: 'no-cache' });
   const data = (await res.json()) as NetworkData;
+  lap('json');
   progress(0.3, 'Building road graph and signal plans…');
   await nextFrame();
   sim = new Simulation(data, {
@@ -38,11 +41,13 @@ async function boot() {
     strategy: 'fixed',
     startTime: 6.5 * 3600,
   } as any);
+  lap('sim');
   progress(0.55, `Placing ${sim.agents.length.toLocaleString()} people with daily plans…`);
   await nextFrame();
   progress(0.7, 'Extruding 11,000 buildings…');
   await nextFrame();
   world = new World($('view') as HTMLCanvasElement, sim);
+  lap('world');
   progress(1, 'Ready');
   setupUI();
   setupInteraction();
@@ -128,6 +133,12 @@ function setupUI() {
   $('btnStats').onclick = () => { document.body.classList.remove('hidepanels'); document.body.classList.toggle('showright'); };
   $<HTMLSelectElement>('roadColor').onchange = (e) => world.setRoadColorMode((e.target as HTMLSelectElement).value as any);
   $<HTMLSelectElement>('vehColor').onchange = (e) => { world.vehicleColorMode = (e.target as HTMLSelectElement).value as any; };
+  $<HTMLSelectElement>('goto').onchange = (e) => {
+    const v = (e.target as HTMLSelectElement).value;
+    if (!v) return;
+    const [x, y, d] = v.split(',').map(Number);
+    world.flyTo(x, y, d);
+  };
   $<HTMLInputElement>('showBuildings').onchange = (e) => world.setBuildingsVisible((e.target as HTMLInputElement).checked);
   $<HTMLInputElement>('lightTheme').onchange = (e) => {
     const light = (e.target as HTMLInputElement).checked;
