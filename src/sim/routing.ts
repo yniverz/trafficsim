@@ -91,6 +91,64 @@ export class Router {
     return r ? { edges: r, node: reached } : null;
   }
 
+  /**
+   * Dijkstra from several weighted sources to several weighted targets.
+   * Returns the edge path and the chosen source/target nodes.
+   */
+  multi(sources: [number, number][], targets: Map<number, number>, cost: (e: number) => number): { edges: number[]; src: number; dst: number; cost: number } | null {
+    const g = this.g;
+    this.cur++;
+    const cur = this.cur;
+    const { dist, prev, stamp, heap, closed } = this;
+    heap.clear();
+    for (const [n, c] of sources) {
+      if (stamp[n] !== cur || c < dist[n]) {
+        stamp[n] = cur;
+        dist[n] = c;
+        prev[n] = -1;
+        heap.push(c, n);
+      }
+    }
+    let best = Infinity, bestNode = -1;
+    while (heap.size > 0) {
+      const n = heap.pop();
+      const key = heap.lastKey;
+      if (key >= best) break;
+      if (closed[n] === cur) continue;
+      closed[n] = cur;
+      const tc = targets.get(n);
+      if (tc !== undefined && dist[n] + tc < best) {
+        best = dist[n] + tc;
+        bestNode = n;
+      }
+      const d = dist[n];
+      const outs = g.out[n];
+      for (let i = 0; i < outs.length; i++) {
+        const e = outs[i];
+        const c = cost(e);
+        if (!isFinite(c)) continue;
+        const m = g.edgeTo[e];
+        const nd = d + c;
+        if (stamp[m] !== cur || nd < dist[m]) {
+          stamp[m] = cur;
+          dist[m] = nd;
+          prev[m] = e;
+          heap.push(nd, m);
+        }
+      }
+    }
+    if (bestNode < 0) return null;
+    const path: number[] = [];
+    let c = bestNode;
+    while (prev[c] >= 0) {
+      const e = prev[c];
+      path.push(e);
+      c = g.edgeFrom[e];
+    }
+    path.reverse();
+    return { edges: path, src: c, dst: bestNode, cost: best };
+  }
+
   private search(a: number, isGoal: (n: number) => boolean, goalNode: number, cost: (e: number) => number): number[] | null {
     const g = this.g;
     this.cur++;

@@ -440,6 +440,67 @@ let alive = rawEdges.filter((e) => {
 }
 console.log('edges kept', alive.length);
 
+// ---------------------------------------------------------------- join close junctions
+// OSM often models one real intersection as several nodes a few metres apart (dual carriageways,
+// separate signal heads). Contract short road edges into a single junction so signals and
+// right-of-way behave like one intersection.
+const clusterInfo = new Map<number, { signal: number; cross: number; gate: number }>();
+{
+  const SHORT = process.env.JOIN === '0' ? 0 : 22;
+  const MAXEXT = 45;
+  const elen2 = (e: RawEdge) => { let l = 0; for (let i = 2; i < e.pts.length; i += 2) l += Math.hypot(e.pts[i] - e.pts[i - 2], e.pts[i + 1] - e.pts[i - 1]); return l; };
+  const par = new Map<number, number>();
+  const find = (a: number): number => { let r = a; while ((par.get(r) ?? r) !== r) r = par.get(r)!; let c = a; while ((par.get(c) ?? c) !== r) { const n = par.get(c)!; par.set(c, r); c = n; } return r; };
+  const members = new Map<number, number[]>();
+  const memOf = (r: number) => members.get(r) ?? [r];
+  const isRoundabout = (e: RawEdge) => (e.flags & F_ROUNDABOUT) !== 0;
+  const degree = new Map<number, number>();
+  for (const e of alive) { degree.set(e.from, (degree.get(e.from) || 0) + 1); degree.set(e.to, (degree.get(e.to) || 0) + 1); }
+  const junctionish = (id: number) => (degree.get(id) || 0) >= 3 * 1 || special(id);
+  const cand = alive.filter((e) => e.mode === 'road' && e.lanes > 0 && !isRoundabout(e) && elen2(e) < SHORT && junctionish(e.from) && junctionish(e.to) && !gateNodes.has(e.from) && !gateNodes.has(e.to));
+  cand.sort((a, b) => elen2(a) - elen2(b));
+  for (const e of cand) {
+    const ra = find(e.from), rb = find(e.to);
+    if (ra === rb) continue;
+    const m = [...memOf(ra), ...memOf(rb)];
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const id of m) { const [x, y] = xyOf(id); x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    if (Math.hypot(x1 - x0, y1 - y0) > MAXEXT) continue;
+    par.set(rb, ra);
+    members.set(ra, m);
+    members.delete(rb);
+  }
+  let synthId = -1000000;
+  const rep = new Map<number, number>();
+  for (const [root, m] of members) {
+    if (m.length < 2) continue;
+    const id = synthId--;
+    let sx = 0, sy = 0, sig = 0, cross = 0, gate = 0;
+    for (const n of m) {
+      const [x, y] = xyOf(n);
+      sx += x; sy += y;
+      const t = onodes.get(n)?.tags || {};
+      if (t.highway === 'traffic_signals') sig = 1;
+      if (t.highway === 'crossing' || t.railway === 'crossing') cross = Math.max(cross, t.crossing === 'traffic_signals' ? 3 : t.crossing === 'zebra' || t.crossing_ref === 'zebra' ? 2 : 1);
+      if (gateNodes.has(n)) gate = 1;
+      rep.set(n, id);
+    }
+    nodeXY.set(id, [sx / m.length, sy / m.length]);
+    clusterInfo.set(id, { signal: sig, cross, gate });
+  }
+  const out: RawEdge[] = [];
+  let dropped = 0;
+  for (const e of alive) {
+    const f = rep.get(e.from) ?? e.from, t = rep.get(e.to) ?? e.to;
+    if (f === t && (rep.has(e.from) || rep.has(e.to))) { dropped++; continue; }
+    if (f !== e.from) { const [x, y] = xyOf(f); e.pts = [Math.round(x * 10) / 10, Math.round(y * 10) / 10, ...e.pts.slice(2)]; e.from = f; }
+    if (t !== e.to) { const [x, y] = xyOf(t); e.pts = [...e.pts.slice(0, -2), Math.round(x * 10) / 10, Math.round(y * 10) / 10]; e.to = t; }
+    out.push(e);
+  }
+  alive = out;
+  console.log('junction clusters', [...members.values()].filter((m) => m.length > 1).length, 'edges contracted', dropped);
+}
+
 // ---------------------------------------------------------------- finalise nodes and edges
 const nodeIndex = new Map<number, number>();
 const nodes: NetNodeData[] = [];
@@ -447,6 +508,7 @@ const nodeOf = (id: number) => {
   let i = nodeIndex.get(id);
   if (i === undefined) {
     const [x, y] = xyOf(id);
+    const ci = clusterInfo.get(id);
     const t = onodes.get(id)?.tags || {};
     let cross = 0;
     if (t.highway === 'crossing' || t.railway === 'crossing') {
@@ -454,8 +516,9 @@ const nodeOf = (id: number) => {
       if (t.crossing === 'zebra' || t.crossing_ref === 'zebra' || t.crossing === 'marked') cross = 2;
       if (t.crossing === 'traffic_signals') cross = 3;
     }
+    if (ci) { cross = ci.cross; }
     i = nodes.length;
-    nodes.push({ x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, signal: t.highway === 'traffic_signals' ? 1 : 0, cross, gate: gateNodes.has(id) ? 1 : 0 });
+    nodes.push({ x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, signal: ci ? ci.signal : t.highway === 'traffic_signals' ? 1 : 0, cross, gate: ci ? ci.gate : gateNodes.has(id) ? 1 : 0 });
     nodeIndex.set(id, i);
   }
   return i;
@@ -735,8 +798,8 @@ console.log('stops', stops.length, 'lines', lines.length, `(${lines.filter((l) =
 let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 for (const n of nodes) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y); }
 const data: NetworkData = { origin: ORIGIN, bounds: { minX, minY, maxX, maxY }, names, nodes, edges, buildings, pois, stops, lines };
-fs.writeFileSync('data/karlsruhe.json', JSON.stringify(data));
-const sz = fs.statSync('data/karlsruhe.json').size;
+fs.writeFileSync('public/data/karlsruhe.json', JSON.stringify(data));
+const sz = fs.statSync('public/data/karlsruhe.json').size;
 console.log('wrote data/karlsruhe.json', (sz / 1e6).toFixed(2), 'MB');
 const modes = { road: 0, tram: 0, walk: 0 } as Record<string, number>;
 edges.forEach((e) => modes[e.mode]++);
