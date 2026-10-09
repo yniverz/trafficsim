@@ -11,7 +11,9 @@
     "fetch-osm": "node scripts/fetch-osm.mjs",
     "build-network": "tsx scripts/build-network.ts",
     "benchmark": "tsx scripts/benchmark.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "headless": "tsx scripts/headless.ts",
+    "sanity": "tsx scripts/sanity.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

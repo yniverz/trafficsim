@@ -48,6 +48,7 @@ async function boot() {
   await nextFrame();
   world = new World($('view') as HTMLCanvasElement, sim);
   lap('world');
+  (window as any).trafficsim = { sim, world };
   progress(1, 'Ready');
   setupUI();
   setupInteraction();
